@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from datetime import datetime
+import json
 
 app = FastAPI(title="HL7 FHIR Converter")
 
@@ -12,9 +14,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Simple in-memory audit log (list acts as our database for now)
+audit_log = []
+
 class ConvertRequest(BaseModel):
     input_text: str
     direction: str
+    role: str = "Clinician"
 
 @app.get("/health")
 def health():
@@ -49,6 +55,20 @@ def convert(request: ConvertRequest):
             "warnings": [],
             "summary": "Successfully converted FHIR Patient to HL7 v2 message"
         }
+
+    # Save to audit log
+    audit_log.append({
+        "id": len(audit_log) + 1,
+        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "user": request.role.lower(),
+        "action": "HL7→FHIR" if request.direction == "hl7ToFhir" else "FHIR→HL7",
+        "status": "success",
+    })
+
     return result
+
+@app.get("/api/audit")
+def get_audit_log():
+    return audit_log
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
