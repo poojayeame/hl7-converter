@@ -22,7 +22,15 @@
     td { padding: 8px; border-bottom: 1px solid #eee; }
     .badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
     .success { background: #e1f5ee; color: #0f6e56; }
+    .revoked { background: #fcebeb; color: #a32d2d; }
+    .pending { background: #faeeda; color: #854f0b; }
     .role-select { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+    .toggle { position: relative; display: inline-block; width: 36px; height: 20px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: #ccc; border-radius: 20px; transition: 0.3s; }
+    .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.3s; }
+    input:checked + .slider { background: #1d9e75; }
+    input:checked + .slider:before { transform: translateX(16px); }
   </style>
 </head>
 <body>
@@ -41,9 +49,10 @@
   <div class="tabs">
     <div class="tab active" onclick="showTab('converter')">Converter</div>
     <div class="tab" onclick="showTab('audit')">Audit Log</div>
+    <div class="tab" onclick="showTab('consent')">Consent</div>
   </div>
 
-  <!-- Converter tab -->
+  <!-- Converter -->
   <div id="tab-converter">
     <div class="card">
       <div class="label">Direction</div>
@@ -59,7 +68,7 @@ PID|1||12345|||DOE^JOHN||19800101|M</textarea>
     <div id="result"></div>
   </div>
 
-  <!-- Audit log tab -->
+  <!-- Audit Log -->
   <div id="tab-audit" class="hidden">
     <div class="card">
       <div class="label">HIPAA Audit Trail</div>
@@ -68,17 +77,27 @@ PID|1||12345|||DOE^JOHN||19800101|M</textarea>
     </div>
   </div>
 
+  <!-- Consent -->
+  <div id="tab-consent" class="hidden">
+    <div class="card">
+      <div class="label">GDPR Consent Management</div>
+      <p style="font-size:13px;color:#888;margin-bottom:12px">Toggle consent for each patient. Only Admin and Clinician roles can make changes.</p>
+      <div id="consent-list"></div>
+    </div>
+  </div>
+
   <script>
     const BASE = "https://hl7-converter-production.up.railway.app";
 
     function showTab(name) {
-      ["converter", "audit"].forEach(t => {
+      ["converter", "audit", "consent"].forEach(t => {
         document.getElementById("tab-" + t).classList.toggle("hidden", t !== name);
       });
       document.querySelectorAll(".tab").forEach((el, i) => {
-        el.classList.toggle("active", ["converter", "audit"][i] === name);
+        el.classList.toggle("active", ["converter", "audit", "consent"][i] === name);
       });
-      if (name === "audit") loadAudit();
+      if (name === "audit")   loadAudit();
+      if (name === "consent") loadConsent();
     }
 
     async function convert() {
@@ -101,7 +120,6 @@ PID|1||12345|||DOE^JOHN||19800101|M</textarea>
       });
 
       const data = await response.json();
-
       const converted = typeof data.converted === "string"
         ? data.converted
         : JSON.stringify(data.converted, null, 2);
@@ -109,48 +127,67 @@ PID|1||12345|||DOE^JOHN||19800101|M</textarea>
       const mappings = data.mappings.map(m => `
         <div class="mapping">
           <strong>${m.source}</strong> → <strong>${m.target}</strong>
-          · ${Math.round(m.confidence * 100)}% confidence
-          · ${m.notes}
+          · ${Math.round(m.confidence * 100)}% confidence · ${m.notes}
         </div>`).join("");
 
       resultDiv.innerHTML = `
-        <div class="card">
-          <div class="label">Summary</div>
-          <p>${data.summary}</p>
-        </div>
-        <div class="card">
-          <div class="label">Converted Output</div>
-          <pre>${converted}</pre>
-        </div>
-        <div class="card">
-          <div class="label">AI Field Mappings</div>
-          ${mappings}
-        </div>`;
+        <div class="card"><div class="label">Summary</div><p>${data.summary}</p></div>
+        <div class="card"><div class="label">Converted Output</div><pre>${converted}</pre></div>
+        <div class="card"><div class="label">AI Field Mappings</div>${mappings}</div>`;
     }
 
     async function loadAudit() {
       const res  = await fetch(BASE + "/api/audit");
       const logs = await res.json();
-
       if (logs.length === 0) {
-        document.getElementById("audit-list").innerHTML = "<p style='color:#888'>No conversions yet. Convert something first.</p>";
+        document.getElementById("audit-list").innerHTML = "<p style='color:#888'>No conversions yet.</p>";
         return;
       }
-
       document.getElementById("audit-list").innerHTML = `
         <table>
           <thead><tr><th>#</th><th>Time</th><th>User</th><th>Action</th><th>Status</th></tr></thead>
-          <tbody>
-            ${logs.map(l => `
-              <tr>
-                <td>${l.id}</td>
-                <td>${l.timestamp}</td>
-                <td>${l.user}</td>
-                <td>${l.action}</td>
-                <td><span class="badge success">${l.status}</span></td>
-              </tr>`).join("")}
+          <tbody>${logs.map(l => `
+            <tr>
+              <td>${l.id}</td>
+              <td>${l.timestamp}</td>
+              <td>${l.user}</td>
+              <td>${l.action}</td>
+              <td><span class="badge success">${l.status}</span></td>
+            </tr>`).join("")}
           </tbody>
         </table>`;
+    }
+
+    async function loadConsent() {
+      const res     = await fetch(BASE + "/api/consent");
+      const records = await res.json();
+      const role    = document.getElementById("role").value;
+      const canEdit = ["Admin", "Clinician"].includes(role);
+
+      document.getElementById("consent-list").innerHTML = `
+        <table>
+          <thead><tr><th>Patient</th><th>GDPR</th><th>HIPAA</th><th>Research</th><th>Updated</th><th>Status</th></tr></thead>
+          <tbody>${records.map(p => `
+            <tr>
+              <td><strong>${p.name}</strong><br><small style="color:#888">${p.id}</small></td>
+              <td><label class="toggle"><input type="checkbox" ${p.gdpr ? "checked" : ""} ${!canEdit ? "disabled" : ""} onchange="updateConsent('${p.id}', 'gdpr', this.checked)"><span class="slider"></span></label></td>
+              <td><label class="toggle"><input type="checkbox" ${p.hipaa ? "checked" : ""} ${!canEdit ? "disabled" : ""} onchange="updateConsent('${p.id}', 'hipaa', this.checked)"><span class="slider"></span></label></td>
+              <td><label class="toggle"><input type="checkbox" ${p.research ? "checked" : ""} ${!canEdit ? "disabled" : ""} onchange="updateConsent('${p.id}', 'research', this.checked)"><span class="slider"></span></label></td>
+              <td style="font-size:12px;color:#888">${p.last_updated}</td>
+              <td><span class="badge ${p.status}">${p.status}</span></td>
+            </tr>`).join("")}
+          </tbody>
+        </table>`;
+    }
+
+    async function updateConsent(patientId, field, value) {
+      const role = document.getElementById("role").value;
+      await fetch(`${BASE}/api/consent/${patientId}?role=${role}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ field, value })
+      });
+      loadConsent();
     }
   </script>
 </body>
